@@ -2136,6 +2136,99 @@ public class HoodieTableMetadataUtil {
     }
   }
 
+  public static HoodieData<HoodieRecord> conve\
+  rtToPartitionStatsRecords(
+          HoodieEngineContext engineContext,
+          HoodieTableMetaClient dataMetaClient,
+          HoodieMetadataConfig metadataConfig,
+          Option<HoodieCommitMetadata> commitMetadataOption,
+          Option<List<DirectoryInfo>> partitionInfoListOption) {
+
+    // Determine the table schema
+    Option<Schema> tableSchema = commitMetadataOption
+            .map(commitMetadata -> {
+              HoodieTableConfig tableConfig = dataMetaClient.getTableConfig();
+              return Option.ofNullable(commitMetadata.getMetadata(HoodieCommitMetadata.SCHEMA_KEY))
+                      .flatMap(writerSchemaStr ->
+                              isNullOrEmpty(writerSchemaStr)
+                                      ? Option.empty()
+                                      : Option.of(new Schema.Parser().parse(writerSchemaStr)))
+                      .map(schema -> tableConfig.populateMetaFields() ? addMetadataFields(schema) : schema);
+            })
+            .orElseGet(() -> Option.ofNullable(dataMetaClient.getTableConfig().getTableSchema()));
+
+    // Get columns to index
+    List<String> columnsToIndex = getColumnsToIndex(metadataConfig.isPartitionStatsIndexEnabled(),
+            metadataConfig.getColumnsEnabledForColumnStatsIndex(),
+            Lazy.eagerly(tableSchema));
+
+    if (columnsToIndex.isEmpty()) {
+      return engineContext.emptyHoodieData();
+    }
+
+    // Process based on input type
+    if (commitMetadataOption.isPresent()) {
+      HoodieCommitMetadata commitMetadata = commitMetadataOption.get();
+      List<HoodieWriteStat> allWriteStats = commitMetadata.getPartitionToWriteStats().values().stream()
+              .flatMap(Collection::stream).collect(Collectors.toList());
+
+      if (allWriteStats.isEmpty()) {
+        return engineContext.emptyHoodieData();
+      }
+
+      List<List<HoodieWriteStat>> partitionedWriteStats = allWriteStats.stream()
+              .collect(Collectors.groupingBy(HoodieWriteStat::getPartitionPath))
+              .values()
+              .stream()
+              .collect(Collectors.toList());
+
+      int parallelism = Math.max(Math.min(partitionedWriteStats.size(), metadataConfig.getPartitionStatsIndexParallelism()), 1);
+
+      return engineContext.parallelize(partitionedWriteStats, parallelism).flatMap(partitionedWriteStat -> {
+        final String partitionName = partitionedWriteStat.get(0).getPartitionPath();
+        List<List<HoodieColumnRangeMetadata<Comparable>>> fileColumnMetadata = partitionedWriteStat.stream()
+                .map(writeStat -> translateWriteStatToFileStats(writeStat, dataMetaClient, columnsToIndex))
+                .collect(Collectors.toList());
+        return aggregateAndCreateRecords(partitionName, fileColumnMetadata, engineContext);
+      });
+
+    } else if (partitionInfoListOption.isPresent()) {
+      List<DirectoryInfo> partitionInfoList = partitionInfoListOption.get();
+      int parallelism = Math.max(Math.min(partitionInfoList.size(), metadataConfig.getPartitionStatsIndexParallelism()), 1);
+
+      return engineContext.parallelize(partitionInfoList, parallelism).flatMap(partitionInfo -> {
+        final String partitionPath = partitionInfo.getRelativePath();
+        List<List<HoodieColumnRangeMetadata<Comparable>>> fileColumnMetadata = partitionInfo.getFileNameToSizeMap().keySet().stream()
+                .map(fileName -> getFileStatsRangeMetadata(partitionPath, partitionPath + "/" + fileName, dataMetaClient, columnsToIndex, false))
+                .collect(Collectors.toList());
+        return aggregateAndCreateRecords(partitionPath, fileColumnMetadata, engineContext);
+      });
+
+    } else {
+      throw new IllegalArgumentException("Either commitMetadata or partitionInfoList must be provided");
+    }
+  }
+
+  private static HoodieData<HoodieRecord> aggregateAndCreateRecords(
+          String partitionName,
+          List<List<HoodieColumnRangeMetadata<Comparable>>> fileColumnMetadata,
+          HoodieEngineContext engineContext) {
+
+    Map<String, List<HoodieColumnRangeMetadata<Comparable>>> columnMetadataMap = fileColumnMetadata.stream()
+            .flatMap(List::stream)
+            .collect(Collectors.groupingBy(HoodieColumnRangeMetadata::getColumnName, Collectors.toList()));
+
+    Stream<HoodieColumnRangeMetadata<Comparable>> partitionStatsRangeMetadata = columnMetadataMap.entrySet().stream()
+            .map(entry -> FileFormatUtils.getColumnRangeInPartition(partitionName, entry.getValue()));
+
+    List<HoodieColumnRangeMetadata<Comparable>> rangeMetadataList = partitionStatsRangeMetadata.collect(Collectors.toList());
+
+    Stream<HoodieRecord> recordStream = HoodieMetadataPayload.createPartitionStatsRecords(partitionName, rangeMetadataList, false);
+    List<HoodieRecord> records = recordStream.collect(Collectors.toList());
+
+    return engineContext.parallelize(records);
+  }
+
   private static List<HoodieColumnRangeMetadata<Comparable>> translateWriteStatToFileStats(HoodieWriteStat writeStat,
                                                                                            HoodieTableMetaClient datasetMetaClient,
                                                                                            List<String> columnsToIndex) {
