@@ -2120,22 +2120,22 @@ public class HoodieTableMetadataUtil {
 
       int parallelism = Math.max(Math.min(partitionedWriteStats.size(), metadataConfig.getPartitionStatsIndexParallelism()), 1);
       //Todo : Solve for HoodieDeltaWriteStat
-//      return createPartitionStatsRecords(engineContext, createPartitionInfoListFromPartitionedWriteStats(partitionedWriteStats), dataMetaClient, columnsToIndex, parallelism);
-      return engineContext.parallelize(partitionedWriteStats, parallelism).flatMap(partitionedWriteStat -> {
-        final String partitionName = partitionedWriteStat.get(0).getPartitionPath();
-        // Step 1: Collect Column Metadata for Each File
-        List<List<HoodieColumnRangeMetadata<Comparable>>> fileColumnMetadata = partitionedWriteStat.stream()
-                .map(writeStat -> translateWriteStatToFileStats(writeStat, dataMetaClient, columnsToIndex))
-                .collect(toList());
-        // Step 2: Flatten and Group by Column Name
-        Map<String, List<HoodieColumnRangeMetadata<Comparable>>> columnMetadataMap = fileColumnMetadata.stream()
-                .flatMap(List::stream)
-                .collect(Collectors.groupingBy(HoodieColumnRangeMetadata::getColumnName, toList())); // Group by column name
-        // Step 3: Aggregate Column Ranges
-        Stream<HoodieColumnRangeMetadata<Comparable>> partitionStatsRangeMetadata = columnMetadataMap.entrySet().stream()
-                .map(entry -> FileFormatUtils.getColumnRangeInPartition(partitionName, entry.getValue()));
-        return HoodieMetadataPayload.createPartitionStatsRecords(partitionName, partitionStatsRangeMetadata.collect(toList()), false).iterator();
-      });
+      return createPartitionStatsRecords(engineContext, createPartitionInfoListFromPartitionedWriteStats(partitionedWriteStats), dataMetaClient, columnsToIndex, parallelism);
+//      return engineContext.parallelize(partitionedWriteStats, parallelism).flatMap(partitionedWriteStat -> {
+//        final String partitionName = partitionedWriteStat.get(0).getPartitionPath();
+//        // Step 1: Collect Column Metadata for Each File
+//        List<List<HoodieColumnRangeMetadata<Comparable>>> fileColumnMetadata = partitionedWriteStat.stream()
+//                .map(writeStat -> translateWriteStatToFileStats(writeStat, dataMetaClient, columnsToIndex))
+//                .collect(toList());
+//        // Step 2: Flatten and Group by Column Name
+//        Map<String, List<HoodieColumnRangeMetadata<Comparable>>> columnMetadataMap = fileColumnMetadata.stream()
+//                .flatMap(List::stream)
+//                .collect(Collectors.groupingBy(HoodieColumnRangeMetadata::getColumnName, toList())); // Group by column name
+//        // Step 3: Aggregate Column Ranges
+//        Stream<HoodieColumnRangeMetadata<Comparable>> partitionStatsRangeMetadata = columnMetadataMap.entrySet().stream()
+//                .map(entry -> FileFormatUtils.getColumnRangeInPartition(partitionName, entry.getValue()));
+//        return HoodieMetadataPayload.createPartitionStatsRecords(partitionName, partitionStatsRangeMetadata.collect(toList()), false).iterator();
+//      });
     } catch (Exception e) {
       throw new HoodieException("Failed to generate column stats records for metadata table", e);
     }
