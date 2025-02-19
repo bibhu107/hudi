@@ -1183,7 +1183,7 @@ public abstract class BaseHoodieWriteClient<T, I, K, O> extends BaseHoodieClient
   protected HoodieWriteMetadata<O> compact(String compactionInstantTime, boolean shouldComplete) {
     HoodieTable table = createTable(config);
     preWrite(compactionInstantTime, WriteOperationType.COMPACT, table.getMetaClient());
-    return tableServiceClient.compact(compactionInstantTime, shouldComplete);
+    return tableServiceClient.compact(table, compactionInstantTime, shouldComplete);
   }
 
   /**
@@ -1298,6 +1298,10 @@ public abstract class BaseHoodieWriteClient<T, I, K, O> extends BaseHoodieClient
     if (instantTime.isPresent()) {
       ownerInstant = Option.of(metaClient.createNewInstant(HoodieInstant.State.INFLIGHT, CommitUtils.getCommitActionType(operationType,
           metaClient.getTableType()), instantTime.get()));
+    }
+    boolean requiresInitTable = needsUpgradeOrDowngrade(metaClient) || config.isMetadataTableEnabled();
+    if (!requiresInitTable) {
+      return;
     }
     executeUsingTxnManager(ownerInstant, () -> {
       tryUpgrade(metaClient, instantTime);
@@ -1443,8 +1447,9 @@ public abstract class BaseHoodieWriteClient<T, I, K, O> extends BaseHoodieClient
   /**
    * Called after each write, to release any resources used.
    */
-  protected void releaseResources(String instantTime) {
-    // do nothing here
+  public void releaseResources(String instantTime) {
+    // stop heartbeat for instant
+    heartbeatClient.stop(instantTime);
   }
 
   @Override

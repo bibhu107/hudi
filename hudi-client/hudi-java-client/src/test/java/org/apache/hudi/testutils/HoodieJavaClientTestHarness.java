@@ -185,6 +185,16 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
     public Option<String> getProperty(EngineProperty prop) {
       return Option.empty();
     }
+
+    @Override
+    public Supplier<Integer> getTaskAttemptNumberSupplier() {
+      return () -> -1;
+    }
+
+    @Override
+    public Supplier<Integer> getStageAttemptNumberSupplier() {
+      return () -> -1;
+    }
   }
 
   protected void initFileSystem(String basePath, StorageConfiguration<?> hadoopConf) {
@@ -431,7 +441,9 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
       // Metadata table should automatically compact and clean
       // versions are +1 as autoClean / compaction happens end of commits
       int numFileVersions = metadataWriteConfig.getCleanerFileVersionsRetained() + 1;
-      HoodieTableFileSystemView fsView = new HoodieTableFileSystemView(metadataMetaClient, metadataMetaClient.getActiveTimeline());
+      HoodieTableMetadata fileBasedTableMetadata = new FileSystemBackedTableMetadata(engineContext, metadataMetaClient.getTableConfig(), metadataMetaClient.getStorage(),
+          metadataMetaClient.getBasePath().toString());
+      HoodieTableFileSystemView fsView = new HoodieTableFileSystemView(fileBasedTableMetadata, metadataMetaClient, metadataMetaClient.getActiveTimeline());
       metadataTablePartitions.forEach(partition -> {
         List<FileSlice> latestSlices = fsView.getLatestFileSlices(partition).collect(Collectors.toList());
         assertTrue(latestSlices.stream().map(FileSlice::getBaseFile).filter(Objects::nonNull).count() > 0, "Should have a single latest base file");
